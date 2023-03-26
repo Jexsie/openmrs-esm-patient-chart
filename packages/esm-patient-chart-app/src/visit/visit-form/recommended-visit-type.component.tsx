@@ -3,18 +3,22 @@ import { StructuredListSkeleton } from '@carbon/react';
 import { PatientProgram } from '@openmrs/esm-patient-common-lib';
 import { useRecommendedVisitTypes } from '../hooks/useRecommendedVisitTypes';
 import BaseVisitType from './base-visit-type.component';
+import { Control, UseFormSetValue } from 'react-hook-form';
+import { FormData, PatientEnrollment } from './visit-form.component';
 
 interface RecommendedVisitTypeProp {
   patientUuid: string;
-  patientProgramEnrollment: PatientProgram;
-  onChange: (visitTypeUuid) => void;
+  patientProgramEnrollment: PatientEnrollment;
   locationUuid: string;
+  control: Control<FormData>;
+  setValue: UseFormSetValue<FormData>;
 }
 
 const RecommendedVisitType: React.FC<RecommendedVisitTypeProp> = ({
   patientUuid,
   patientProgramEnrollment,
-  onChange,
+  setValue,
+  control,
   locationUuid,
 }) => {
   const { recommendedVisitTypes, error, isLoading } = useRecommendedVisitTypes(
@@ -29,7 +33,12 @@ const RecommendedVisitType: React.FC<RecommendedVisitTypeProp> = ({
       {isLoading ? (
         <StructuredListSkeleton />
       ) : (
-        <BaseVisitType onChange={onChange} visitTypes={recommendedVisitTypes} patientUuid={patientUuid} />
+        <BaseVisitType
+          control={control}
+          setValue={setValue}
+          visitTypes={recommendedVisitTypes}
+          patientUuid={patientUuid}
+        />
       )}
     </div>
   );

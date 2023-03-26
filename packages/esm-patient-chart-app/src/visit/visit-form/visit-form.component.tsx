@@ -50,6 +50,39 @@ import { MemoizedRecommendedVisitType } from './recommended-visit-type.component
 import { ChartConfig } from '../../config-schema';
 import VisitAttributeTypeFields from './visit-attribute-type.component';
 import { saveQueueEntry } from '../hooks/useServiceQueue';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Controller, useForm } from 'react-hook-form';
+
+const openmrsResourceSchema = z.object({
+  uuid: z.string(),
+  display: z.string().optional(),
+  extraProperties: z.record(z.any()),
+});
+
+const enrollmentSchema = z.object({
+  uuid: z.string(),
+  display: z.string(),
+  patient: openmrsResourceSchema,
+  program: openmrsResourceSchema,
+  dateEnrolled: z.string(),
+  dateCompleted: z.string(),
+  location: openmrsResourceSchema,
+});
+
+export type PatientEnrollment = z.infer<typeof enrollmentSchema>;
+
+const schema = z.object({
+  visitDate: z.date(),
+  visitTime: z.string(),
+  selectedLocation: z.string(),
+  visitType: z.string(),
+  enrollment: enrollmentSchema.optional(),
+  contentSwitcherIndex: z.number(),
+  timeFormat: z.enum(['AM', 'PM']),
+});
+
+export type FormData = z.infer<typeof schema>;
 
 const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWorkspace, promptBeforeClosing }) => {
   const { t } = useTranslation();
@@ -58,12 +91,8 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
   const sessionUser = useSession();
   const sessionLocation = sessionUser?.sessionLocation?.uuid;
   const config = useConfig() as ChartConfig;
-  const [contentSwitcherIndex, setContentSwitcherIndex] = useState(config.showRecommendedVisitTypeTab ? 0 : 1);
-  const [isMissingVisitType, setIsMissingVisitType] = useState(false);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [timeFormat, setTimeFormat] = useState<amPm>(new Date().getHours() >= 12 ? 'PM' : 'AM');
-  const [visitDate, setVisitDate] = useState(new Date());
-  const [visitTime, setVisitTime] = useState(dayjs(new Date()).format('hh:mm'));
   const state = useMemo(() => ({ patientUuid }), [patientUuid]);
   const { activePatientEnrollment, isLoading } = useActivePatientEnrollment(patientUuid);
   const allVisitTypes = useVisitTypes();
@@ -75,27 +104,40 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
   const [errorFetchingResources, setErrorFetchingResources] = useState<{
     blockSavingForm: boolean;
   }>(null);
-  const [selectedLocation, setSelectedLocation] = useState(() => (sessionLocation ? sessionLocation : ''));
-  const [visitType, setVisitType] = useState<string | null>(() => {
-    if (locations?.length && sessionUser?.sessionLocation?.uuid) {
-      return allVisitTypes?.length === 1 ? allVisitTypes[0].uuid : null;
-    }
 
-    return null;
+  const {
+    control,
+    getValues,
+    setValue,
+    formState: { errors },
+    handleSubmit,
+  } = useForm<FormData>({
+    resolver: zodResolver(schema),
+    mode: 'all',
+    defaultValues: {
+      visitDate: new Date(),
+      visitTime: dayjs(new Date()).format('hh:mm'),
+      timeFormat: new Date().getHours() >= 12 ? 'PM' : 'AM',
+      selectedLocation: sessionLocation ? sessionLocation : '',
+      enrollment: activePatientEnrollment[0],
+      contentSwitcherIndex: config.showRecommendedVisitTypeTab ? 0 : 1,
+      visitType: (() => {
+        if (locations?.length && sessionUser?.sessionLocation?.uuid) {
+          return allVisitTypes?.length === 1 ? allVisitTypes[0].uuid : null;
+        }
+
+        return null;
+      })(),
+    },
   });
   const visitQueueNumberAttributeUuid = config.visitQueueNumberAttributeUuid;
 
-  const handleSubmit = useCallback(
-    (event) => {
-      event.preventDefault();
+  const onSubmit = useCallback(
+    (data: FormData, event) => {
+      const { visitDate, visitTime, selectedLocation, visitType, timeFormat } = data;
 
       if (config.visitAttributeTypes?.find(({ uuid, required }) => required && !visitAttributes[uuid])) {
         setIsMissingRequiredAttributes(true);
-        return;
-      }
-
-      if (!visitType) {
-        setIsMissingVisitType(true);
         return;
       }
 
@@ -201,12 +243,7 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
       visitQueueNumberAttributeUuid,
       mutate,
       patientUuid,
-      selectedLocation,
       t,
-      timeFormat,
-      visitDate,
-      visitTime,
-      visitType,
       visitAttributes,
       setIsMissingRequiredAttributes,
     ],
@@ -218,7 +255,7 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
   };
 
   return (
-    <Form className={styles.form} onChange={handleOnChange} onSubmit={handleSubmit}>
+    <Form className={styles.form} onChange={handleOnChange} onSubmit={handleSubmit(onSubmit)}>
       {errorFetchingResources && (
         <InlineNotification
           kind={errorFetchingResources?.blockSavingForm ? 'error' : 'warning'}
@@ -239,42 +276,63 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
           <section className={styles.section}>
             <div className={styles.sectionTitle}>{t('dateAndTimeOfVisit', 'Date and time of visit')}</div>
             <div className={styles.dateTimeSection}>
-              <DatePicker
-                dateFormat="d/m/Y"
-                datePickerType="single"
-                id="visitDate"
-                light={isTablet}
-                style={{ paddingBottom: '1rem' }}
-                maxDate={new Date().toISOString()}
-                onChange={([date]) => setVisitDate(date)}
-                value={visitDate}
-              >
-                <DatePickerInput
-                  id="visitStartDateInput"
-                  labelText={t('date', 'Date')}
-                  placeholder="dd/mm/yyyy"
-                  style={{ width: '100%' }}
-                />
-              </DatePicker>
-              <ResponsiveWrapper isTablet={isTablet}>
-                <TimePicker
-                  id="visitStartTime"
-                  labelText={t('time', 'Time')}
-                  onChange={(event) => setVisitTime(event.target.value as amPm)}
-                  pattern="^(1[0-2]|0?[1-9]):([0-5]?[0-9])$"
-                  style={{ marginLeft: '0.125rem', flex: 'none' }}
-                  value={visitTime}
-                >
-                  <TimePickerSelect
-                    id="visitStartTimeSelect"
-                    onChange={(event) => setTimeFormat(event.target.value as amPm)}
-                    value={timeFormat}
-                    aria-label={t('time', 'Time')}
+              <Controller
+                control={control}
+                name="visitDate"
+                render={({ field: { onBlur, onChange, value } }) => (
+                  <DatePicker
+                    dateFormat="d/m/Y"
+                    datePickerType="single"
+                    id="visitDate"
+                    light={isTablet}
+                    style={{ paddingBottom: '1rem' }}
+                    maxDate={new Date().toISOString()}
+                    onChange={([date]) => onChange(date)}
+                    onBlur={onBlur}
+                    value={value}
                   >
-                    <SelectItem value="AM" text="AM" />
-                    <SelectItem value="PM" text="PM" />
-                  </TimePickerSelect>
-                </TimePicker>
+                    <DatePickerInput
+                      id="visitStartDateInput"
+                      labelText={t('date', 'Date')}
+                      placeholder="dd/mm/yyyy"
+                      style={{ width: '100%' }}
+                    />
+                  </DatePicker>
+                )}
+              />
+              <ResponsiveWrapper isTablet={isTablet}>
+                <Controller
+                  control={control}
+                  name="visitTime"
+                  render={({ field: { onBlur, onChange, value } }) => (
+                    <TimePicker
+                      id="visitStartTime"
+                      labelText={t('time', 'Time')}
+                      onChange={(event) => onChange(event.target.value as amPm)}
+                      onBlur={onBlur}
+                      pattern="^(1[0-2]|0?[1-9]):([0-5]?[0-9])$"
+                      style={{ marginLeft: '0.125rem', flex: 'none' }}
+                      value={value}
+                    >
+                      <Controller
+                        control={control}
+                        name="timeFormat"
+                        render={({ field: { onBlur, onChange, value } }) => (
+                          <TimePickerSelect
+                            id="visitStartTimeSelect"
+                            onChange={(event) => onChange(event.target.value as amPm)}
+                            value={value}
+                            onBlur={onBlur}
+                            aria-label={t('time', 'Time')}
+                          >
+                            <SelectItem value="AM" text="AM" />
+                            <SelectItem value="PM" text="PM" />
+                          </TimePickerSelect>
+                        )}
+                      />
+                    </TimePicker>
+                  )}
+                />
               </ResponsiveWrapper>
             </div>
           </section>
@@ -283,22 +341,31 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
           <section>
             <div className={styles.sectionTitle}>{t('visitLocation', 'Visit Location')}</div>
             <div className={styles.selectContainer}>
-              <Select
-                labelText={t('selectLocation', 'Select a location')}
-                light={isTablet}
-                id="location"
-                invalidText="Required"
-                value={selectedLocation}
-                onChange={(event) => setSelectedLocation(event.target.value)}
-              >
-                {!selectedLocation ? <SelectItem text={t('selectOption', 'Select an option')} value="" /> : null}
-                {locations?.length > 0 &&
-                  locations.map((location) => (
-                    <SelectItem key={location.uuid} text={location.display} value={location.uuid}>
-                      {location.display}
-                    </SelectItem>
-                  ))}
-              </Select>
+              <Controller
+                control={control}
+                name="selectedLocation"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <Select
+                    labelText={t('selectLocation', 'Select a location')}
+                    light={isTablet}
+                    id="location"
+                    invalidText="Required"
+                    onChange={(event) => onChange(event.target.value)}
+                    onBlur={onBlur}
+                    value={value}
+                  >
+                    {!getValues('selectedLocation') ? (
+                      <SelectItem text={t('selectOption', 'Select an option')} value="" />
+                    ) : null}
+                    {locations?.length > 0 &&
+                      locations.map((location) => (
+                        <SelectItem key={location.uuid} text={location.display} value={location.uuid}>
+                          {location.display}
+                        </SelectItem>
+                      ))}
+                  </Select>
+                )}
+              />
             </div>
           </section>
 
@@ -308,24 +375,32 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
             <section>
               <div className={styles.sectionTitle}>{t('program', 'Program')}</div>
               <FormGroup legendText={t('selectProgramType', 'Select program type')}>
-                <RadioButtonGroup
-                  defaultSelected={enrollment?.program?.uuid ?? ''}
-                  orientation="vertical"
-                  onChange={(uuid) =>
-                    setEnrollment(activePatientEnrollment.find(({ program }) => program.uuid === uuid))
-                  }
-                  name="program-type-radio-group"
-                >
-                  {activePatientEnrollment.map(({ uuid, display, program }) => (
-                    <RadioButton
-                      key={uuid}
-                      className={styles.radioButton}
-                      id={uuid}
-                      labelText={display}
-                      value={program.uuid}
-                    />
-                  ))}
-                </RadioButtonGroup>
+                <Controller
+                  control={control}
+                  name="enrollment"
+                  render={({ field: { onBlur, onChange, value } }) => (
+                    <RadioButtonGroup
+                      defaultSelected={getValues('enrollment')?.program?.uuid ?? ''}
+                      orientation="vertical"
+                      onChange={(uuid) =>
+                        onChange(activePatientEnrollment.find(({ program }) => program.uuid === uuid))
+                      }
+                      valueSelected={value}
+                      onBlur={onBlur}
+                      name="program-type-radio-group"
+                    >
+                      {activePatientEnrollment.map(({ uuid, display, program }) => (
+                        <RadioButton
+                          key={uuid}
+                          className={styles.radioButton}
+                          id={uuid}
+                          labelText={display}
+                          value={program.uuid}
+                        />
+                      ))}
+                    </RadioButtonGroup>
+                  )}
+                />
               </FormGroup>
             </section>
           )}
@@ -336,30 +411,29 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
 
             {config.showRecommendedVisitTypeTab ? (
               <>
-                <ContentSwitcher
-                  selectedIndex={contentSwitcherIndex}
-                  onChange={({ index }) => setContentSwitcherIndex(index)}
-                >
-                  <Switch name="recommended" text={t('recommended', 'Recommended')} />
-                  <Switch name="all" text={t('all', 'All')} />
-                </ContentSwitcher>
-                {contentSwitcherIndex === 0 && !isLoading && (
+                <Controller
+                  control={control}
+                  name="contentSwitcherIndex"
+                  render={({ field: { onBlur, onChange, value } }) => (
+                    <ContentSwitcher selectedIndex={value} onChange={({ index }) => onChange(index)} onBlur={onBlur}>
+                      <Switch name="recommended" text={t('recommended', 'Recommended')} />
+                      <Switch name="all" text={t('all', 'All')} />
+                    </ContentSwitcher>
+                  )}
+                />
+                {getValues('contentSwitcherIndex') === 0 && !isLoading && (
                   <MemoizedRecommendedVisitType
-                    onChange={(visitType) => {
-                      setVisitType(visitType);
-                      setIsMissingVisitType(false);
-                    }}
+                    control={control}
+                    setValue={setValue}
                     patientUuid={patientUuid}
-                    patientProgramEnrollment={enrollment}
-                    locationUuid={selectedLocation}
+                    patientProgramEnrollment={getValues('enrollment')}
+                    locationUuid={getValues('selectedLocation')}
                   />
                 )}
-                {contentSwitcherIndex === 1 && (
+                {getValues('contentSwitcherIndex') === 1 && (
                   <BaseVisitType
-                    onChange={(visitType) => {
-                      setVisitType(visitType);
-                      setIsMissingVisitType(false);
-                    }}
+                    control={control}
+                    setValue={setValue}
                     visitTypes={allVisitTypes}
                     patientUuid={patientUuid}
                   />
@@ -368,17 +442,15 @@ const StartVisitForm: React.FC<DefaultWorkspaceProps> = ({ patientUuid, closeWor
             ) : (
               // Defaults to showing all possible visit types if recommended visits are not enabled
               <BaseVisitType
-                onChange={(visitType) => {
-                  setVisitType(visitType);
-                  setIsMissingVisitType(false);
-                }}
+                control={control}
+                setValue={setValue}
                 visitTypes={allVisitTypes}
                 patientUuid={patientUuid}
               />
             )}
           </section>
 
-          {isMissingVisitType && (
+          {errors.visitType?.message && (
             <section>
               <InlineNotification
                 role="alert"
